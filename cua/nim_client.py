@@ -238,27 +238,8 @@ class NIMClient:
         stop=stop_after_attempt(4),
         reraise=True,
     )
-    def chat(
-        self,
-        messages: list[dict],
-        screenshot_path: str | Path | None = None,
-    ) -> Any:
-        """
-        Send messages to Kimi K2.5.
-
-        If `screenshot_path` is provided the image is injected as the last
-        content item of the final user message.
-        """
-        # Optionally inject screenshot into the last user message
-        if screenshot_path:
-            last = messages[-1]
-            if last["role"] == "user":
-                content = last["content"]
-                if isinstance(content, str):
-                    content = [{"type": "text", "text": content}]
-                content = list(content) + [_image_message(_encode_image(screenshot_path))]
-                messages = messages[:-1] + [{"role": "user", "content": content}]
-
+    def chat(self, messages: list[dict]) -> Any:
+        """Send messages to Kimi K2.5 and return the raw response."""
         log.debug("→ NIM request | messages=%d", len(messages))
 
         response = self._client.chat.completions.create(
@@ -267,9 +248,13 @@ class NIMClient:
             tools=TOOLS,
             tool_choice="auto",
             temperature=0.2,
+            max_tokens=8192,  # 1024 caused degeneration on complex reasoning
         )
 
-        log.debug("← NIM response | finish=%s", response.choices[0].finish_reason)
+        finish = response.choices[0].finish_reason
+        log.debug("← NIM response | finish=%s", finish)
+        if finish == "length":
+            log.warning("Response hit max_tokens — consider raising it further.")
         return response
 
     def parse_tool_calls(self, response: Any) -> list[tuple[str, dict]]:
@@ -309,4 +294,22 @@ class NIMClient:
             "role": "tool",
             "tool_call_id": tool_call_id,
             "content": content,
+        }
+
+    def screenshot_observation_message(self, screenshot_path: str | Path) -> dict:
+        """
+        Build a user-role message that delivers a screenshot to the model.
+
+        This MUST be a user message (not a tool result) because the OpenAI
+        spec requires tool result messages to contain only text.  We append
+        this after all tool results for a given step so the model always
+        sees the current screen before its next action.
+        """
+        b64 = _encode_image(screenshot_path)
+        return {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Current screen state after last action:"},
+                _image_message(b64),
+            ],
         }
