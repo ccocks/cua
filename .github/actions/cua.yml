@@ -1,0 +1,78 @@
+name: Computer Use Agent (Kimi K2.5 via NIM)
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Natural-language task for the agent"
+        required: true
+        default: "Open TextEdit, type 'Hello from Kimi K2.5 CUA!', and save the file as hello.txt on the Desktop."
+      max_steps:
+        description: "Max action steps before aborting"
+        required: false
+        default: "25"
+      screenshot_interval:
+        description: "Seconds to wait after each action before next screenshot"
+        required: false
+        default: "1.5"
+
+jobs:
+  cua:
+    runs-on: macos-latest          # Real macOS display — no Xvfb needed
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ── Python ─────────────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python deps
+        run: |
+          pip install --quiet \
+            pyautogui \
+            pillow \
+            openai \
+            tenacity
+
+      # ── macOS accessibility bootstrap ───────────────────────────────────────
+      # GitHub-hosted macOS runners run as an admin user with Accessibility
+      # already enabled for /usr/bin/python3 in TCC.db.  If you hit
+      # "This process is not trusted!" errors on a self-hosted runner, grant
+      # Accessibility to the Terminal / your Python binary in:
+      #   System Settings → Privacy & Security → Accessibility
+      - name: Allow screen recording (runner bootstrap)
+        run: |
+          # Ensure screencapture can grab the display (already allowed on
+          # GitHub-hosted runners; this is a no-op guard).
+          screencapture -x /tmp/bootstrap.png || true
+
+      # ── Run the agent ───────────────────────────────────────────────────────
+      - name: Run CUA agent
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          CUA_TASK: ${{ github.event.inputs.task }}
+          CUA_MAX_STEPS: ${{ github.event.inputs.max_steps }}
+          CUA_SCREENSHOT_INTERVAL: ${{ github.event.inputs.screenshot_interval }}
+        run: python cua/agent.py
+
+      # ── Upload artefacts ─────────────────────────────────────────────────────
+      - name: Upload session screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cua-session-screenshots
+          path: /tmp/cua_session/
+          if-no-files-found: ignore
+
+      - name: Upload session log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cua-session-log
+          path: /tmp/cua_session/session.log
+          if-no-files-found: ignore
