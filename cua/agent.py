@@ -102,8 +102,12 @@ def _run_agent_loop(task: str) -> None:
         log.info("── Step %d / %d ──────────────────────────", step, MAX_STEPS)
 
         # ── Call the model ────────────────────────────────────────────────────
+        if latest_screenshot:
+            messages.append(client.screenshot_observation_message(latest_screenshot))
+            latest_screenshot = None
+
         try:
-            response = client.chat(messages, screenshot_path=latest_screenshot)
+            response = client.chat(messages)
         except Exception as exc:
             log.error("NIM API error: %s", exc)
             sys.exit(2)
