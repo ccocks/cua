@@ -22,6 +22,7 @@ from pathlib import Path
 
 from executor import ActionExecutor
 from nim_client import NIMClient, SYSTEM_PROMPT
+from screen_recorder import ScreenRecorder
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 SESSION_DIR = Path("/tmp/cua_session")
@@ -54,6 +55,21 @@ def run_agent(task: str) -> None:
     log.info("TASK  : %s", task)
     log.info("STEPS : up to %d", MAX_STEPS)
     log.info("═" * 60)
+
+    # Determine output path: repo root (parent of cua/) / screenshot.mp4
+    repo_root = Path(__file__).resolve().parent.parent
+    output_path = repo_root / "screenshot.mp4"
+
+    recorder = ScreenRecorder(output_path=output_path)
+    recorder.start()
+
+    try:
+        _run_agent_loop(task)
+    finally:
+        recorder.stop()
+
+
+def _run_agent_loop(task: str) -> None:
 
     client = NIMClient()
     executor = ActionExecutor(session_dir=SESSION_DIR)

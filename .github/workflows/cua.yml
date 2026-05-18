@@ -76,3 +76,11 @@ jobs:
           name: cua-session-log
           path: /tmp/cua_session/session.log
           if-no-files-found: ignore
+
+      - name: Upload screen recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cua-screen-recording
+          path: screenshot.mp4
+          if-no-files-found: ignore
