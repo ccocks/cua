@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 # ── NIM endpoint ──────────────────────────────────────────────────────────────
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 # Check https://build.nvidia.com/models for the exact slug if this changes.
-KIMI_MODEL = "moonshotai/kimi-k2"
+KIMI_MODEL = "moonshotai/kimi-k2.6"
 
 
 # ── CUA tool definitions ──────────────────────────────────────────────────────
