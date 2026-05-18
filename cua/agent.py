@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -67,6 +68,7 @@ def run_agent(task: str) -> None:
         _run_agent_loop(task)
     finally:
         recorder.stop()
+        _commit_and_push_video(repo_root, output_path)
 
 
 def _run_agent_loop(task: str) -> None:
@@ -164,8 +166,43 @@ def _find_tool_call_id(assistant_msg: dict, tool_name: str) -> str:
     for tc in assistant_msg.get("tool_calls") or []:
         if tc["function"]["name"] == tool_name:
             return tc["id"]
-    # Fallback (shouldn't happen with well-formed responses)
     return f"call_{tool_name}_{int(time.time())}"
+
+
+def _commit_and_push_video(repo_root: Path, video_path: Path) -> None:
+    """Git add/commit/push the screen recording back to the repo."""
+    if not video_path.exists():
+        log.warning("No video file to commit")
+        return
+
+    token = os.environ.get("GITHUB_TOKEN", "")
+
+    def _git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            log.warning("git %s failed: %s", " ".join(args), result.stderr.strip())
+        return result.stdout.strip()
+
+    try:
+        _git("config", "user.email", "cua-bot@users.noreply.github.com")
+        _git("config", "user.name", "CUA Bot")
+
+        if token:
+            remote = _git("remote", "get-url", "origin")
+            if "github.com" in remote and token not in remote:
+                auth_url = remote.replace("https://", f"https://x-access-token:{token}@")
+                _git("remote", "set-url", "origin", auth_url)
+
+        _git("add", str(video_path))
+        _git("commit", "-m", "[ci skip] update screen recording")
+        log.info("Committed screen recording to repo")
+        _git("push", "origin", "HEAD")
+        log.info("Pushed screen recording to remote")
+    except Exception as exc:
+        log.warning("Failed to commit/push video: %s", exc)
 
 
 if __name__ == "__main__":

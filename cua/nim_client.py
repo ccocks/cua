@@ -267,7 +267,6 @@ class NIMClient:
             tools=TOOLS,
             tool_choice="auto",
             temperature=0.2,
-            max_tokens=1024,
         )
 
         log.debug("← NIM response | finish=%s", response.choices[0].finish_reason)

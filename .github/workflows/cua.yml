@@ -58,6 +58,7 @@ jobs:
           CUA_TASK: ${{ github.event.inputs.task }}
           CUA_MAX_STEPS: ${{ github.event.inputs.max_steps }}
           CUA_SCREENSHOT_INTERVAL: ${{ github.event.inputs.screenshot_interval }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python cua/agent.py
 
       # ── Upload artefacts ─────────────────────────────────────────────────────
@@ -75,12 +76,4 @@ jobs:
         with:
           name: cua-session-log
           path: /tmp/cua_session/session.log
-          if-no-files-found: ignore
-
-      - name: Upload screen recording
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cua-screen-recording
-          path: screenshot.mp4
           if-no-files-found: ignore
