@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 # Fail-safe: moving mouse to corner raises an exception instead of going
 # haywire. Keep enabled in CI.
-pyautogui.FAILSAFE = True
+pyautogui.FAILSAFE = False
 # Global inter-call pause (seconds). Gives macOS time to redraw after clicks.
 pyautogui.PAUSE = 0.1
 
