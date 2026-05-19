@@ -296,6 +296,34 @@ class NIMClient:
             "content": content,
         }
 
+    def trim_context(self, messages: list[dict], max_images: int = 8) -> list[dict]:
+        """Trim message history to keep at most *max_images* screenshot observations.
+
+        Preserves the system prompt and initial user task, then keeps only the
+        most recent conversation groups that contain screenshots.
+        """
+        if len(messages) < 3:
+            return messages
+
+        screenshot_indices = [
+            i
+            for i, msg in enumerate(messages)
+            if (
+                msg.get("role") == "user"
+                and isinstance(msg.get("content"), list)
+                and any(
+                    isinstance(c, dict) and c.get("type") == "image_url"
+                    for c in msg["content"]
+                )
+            )
+        ]
+
+        if len(screenshot_indices) > max_images:
+            keep_from = screenshot_indices[-max_images]
+            return messages[:2] + messages[keep_from:]
+
+        return messages
+
     def screenshot_observation_message(self, screenshot_path: str | Path) -> dict:
         """
         Build a user-role message that delivers a screenshot to the model.

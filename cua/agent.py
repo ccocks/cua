@@ -106,6 +106,8 @@ def _run_agent_loop(task: str) -> None:
             messages.append(client.screenshot_observation_message(latest_screenshot))
             latest_screenshot = None
 
+        messages = client.trim_context(messages)
+
         try:
             response = client.chat(messages)
         except Exception as exc:

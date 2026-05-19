@@ -39,17 +39,67 @@ jobs:
             openai \
             tenacity
 
-      # ── macOS accessibility bootstrap ───────────────────────────────────────
-      # GitHub-hosted macOS runners run as an admin user with Accessibility
-      # already enabled for /usr/bin/python3 in TCC.db.  If you hit
-      # "This process is not trusted!" errors on a self-hosted runner, grant
-      # Accessibility to the Terminal / your Python binary in:
-      #   System Settings → Privacy & Security → Accessibility
-      - name: Allow screen recording (runner bootstrap)
+      # ── macOS TCC bootstrap ─────────────────────────────────────────────────
+      # Writes directly to the user TCC database to pre-grant Screen Recording
+      # for every binary in the call chain, suppressing the
+      # "bash is requesting to bypass the system private window server" dialog.
+      #
+      # Design notes:
+      #   auth_value=2      → always allow
+      #   client_type=1     → path-based identity. Bundle-ID type (0) only
+      #                       applies to signed .app bundles; CI Python has none.
+      #   killall tccd      → tccd caches decisions in memory; kill it so it
+      #                       re-reads the DB. launchd restarts it instantly.
+      #   Schema stability  → the columns used here have been stable since macOS 11.
+      #                       The old `allowed` column was removed in Big Sur.
+      #   We do NOT use     → `tccutil reset ScreenCapture` because that nukes
+      #                       existing grants and re-triggers the dialog.
+      - name: Grant Screen Recording permission (suppress consent dialog)
         run: |
-          # Ensure screencapture can grab the display (already allowed on
-          # GitHub-hosted runners; this is a no-op guard).
-          screencapture -x /tmp/bootstrap.png || true
+          set -euo pipefail
+
+          TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
+          PYTHON_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+
+          grant() {
+            local client="$1"
+            echo "  granting ScreenCapture: $client"
+            sqlite3 "$TCC_DB" \
+              "INSERT OR REPLACE INTO access
+                 (service, client, client_type, auth_value, auth_reason,
+                  auth_version, indirect_object_identifier, flags, last_modified)
+               VALUES
+                 ('kTCCServiceScreenCapture',
+                  '$client', 1, 2, 4, 1, 'UNUSED', 0,
+                  strftime('%s','now'));"
+          }
+
+          echo "=== Patching: $TCC_DB ==="
+          # Cover both shells GHA may use (bash on older runners, zsh on newer)
+          grant "/bin/bash"
+          grant "/bin/zsh"
+          # Python — shim path and real binary path may differ
+          grant "/usr/bin/python3"
+          grant "$PYTHON_BIN"
+          grant "$PYTHON_REAL"
+          # The actual capture binary
+          grant "/usr/sbin/screencapture"
+
+          echo "=== Flushing tccd cache ==="
+          # tccd keeps an in-memory cache — restart it so our inserts take effect.
+          # launchd brings it back up automatically within ~1 second.
+          killall tccd 2>/dev/null || true
+          sleep 1
+
+          echo "=== Verifying grants ==="
+          sqlite3 "$TCC_DB" \
+            "SELECT client, auth_value FROM access
+             WHERE service='kTCCServiceScreenCapture'
+             ORDER BY client;"
+
+          echo "=== Smoke test ==="
+          screencapture -x /tmp/tcc_test.png && echo "OK — screen capture works without dialog"
 
       # ── Run the agent ───────────────────────────────────────────────────────
       - name: Run CUA agent
