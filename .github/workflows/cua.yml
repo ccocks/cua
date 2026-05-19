@@ -86,11 +86,38 @@ jobs:
           # The actual capture binary
           grant "/usr/sbin/screencapture"
 
+          echo "=== Patching system-level TCC DB ==="
+          # On newer GHA runner images, tccd validates against the SYSTEM-level
+          # TCC DB (/Library/...) rather than the user one.  We write to both.
+          # sudo is available on GHA macOS runners without a password.
+          SYS_TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          if [ -f "$SYS_TCC_DB" ]; then
+            sys_grant() {
+              local client="$1"
+              echo "  system-level grant: $client"
+              sudo sqlite3 "$SYS_TCC_DB"                 "INSERT OR REPLACE INTO access
+                   (service, client, client_type, auth_value, auth_reason,
+                    auth_version, indirect_object_identifier, flags, last_modified)
+                 VALUES
+                   ('kTCCServiceScreenCapture',
+                    '$client', 1, 2, 4, 1, 'UNUSED', 0,
+                    strftime('%s','now'));" 2>/dev/null || true
+            }
+            sys_grant "/bin/bash"
+            sys_grant "/bin/zsh"
+            sys_grant "/usr/bin/python3"
+            sys_grant "$PYTHON_BIN"
+            sys_grant "$PYTHON_REAL"
+            sys_grant "/usr/sbin/screencapture"
+          else
+            echo "  (no system TCC DB found — user DB only)"
+          fi
+
           echo "=== Flushing tccd cache ==="
-          # tccd keeps an in-memory cache — restart it so our inserts take effect.
-          # launchd brings it back up automatically within ~1 second.
-          killall tccd 2>/dev/null || true
-          sleep 1
+          # Kill tccd so it re-reads both DBs instead of serving stale cache.
+          # launchd restarts it automatically within ~1 second.
+          sudo killall tccd 2>/dev/null || killall tccd 2>/dev/null || true
+          sleep 2
 
           echo "=== Verifying grants ==="
           sqlite3 "$TCC_DB" \
