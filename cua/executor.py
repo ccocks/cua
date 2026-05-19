@@ -3,21 +3,22 @@ executor.py
 ───────────
 Translates CUA tool-call dicts into real pyautogui / subprocess actions.
 
+Coordinate handling
+───────────────────
+The model sometimes outputs normalized floats in [0, 1] instead of absolute
+pixel coordinates.  _resolve() detects this and converts automatically, so
+either format works.  The model is instructed to use absolute pixels in the
+system prompt, but this is a safety net.
+
 macOS notes
 ───────────
-• Screenshots use `screencapture -x` (silent, no shutter sound) as the
-  primary method; pyautogui.screenshot() is the fallback.
-• Key combos use pyautogui.hotkey(*parts) which maps correctly on macOS
-  ("command" → ⌘, "option" → ⌥).
-• Mouse coordinates are logical pixels on the primary display.
-  If the runner has a Retina (HiDPI) display the physical pixel count is
-  2× but pyautogui already accounts for this via screen size queries.
+• Screenshots use `screencapture -x` (silent) as primary; pyautogui fallback.
+• Key combos use pyautogui.hotkey(*parts) which maps correctly on macOS.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -26,20 +27,34 @@ import pyautogui
 
 log = logging.getLogger(__name__)
 
-# Fail-safe: moving mouse to corner raises an exception instead of going
-# haywire. Keep enabled in CI.
-pyautogui.FAILSAFE = False
-# Global inter-call pause (seconds). Gives macOS time to redraw after clicks.
+pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.1
 
 
 class ActionExecutor:
-    """Executes CUA actions and manages the per-session screenshot directory."""
-
     def __init__(self, session_dir: str | Path = "/tmp/cua_session") -> None:
         self.session_dir = Path(session_dir)
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self._step = 0
+        self._sw, self._sh = pyautogui.size()
+        log.info("Screen size: %dx%d", self._sw, self._sh)
+
+    # ── Coordinate normalisation ──────────────────────────────────────────────
+
+    def _resolve(self, x: float | int, y: float | int) -> tuple[int, int]:
+        """
+        Accept either absolute pixels (int or float > 1) or normalised [0,1]
+        floats and return absolute pixel ints.
+
+        A value is treated as normalised when it is a float strictly between
+        0 and 1 (exclusive).  Integers and floats >= 1 are left as-is.
+        """
+        rx = int(x * self._sw) if isinstance(x, float) and 0.0 < x < 1.0 else int(x)
+        ry = int(y * self._sh) if isinstance(y, float) and 0.0 < y < 1.0 else int(y)
+        # Clamp to screen bounds
+        rx = max(0, min(rx, self._sw - 1))
+        ry = max(0, min(ry, self._sh - 1))
+        return rx, ry
 
     # ── Screenshot ────────────────────────────────────────────────────────────
 
@@ -47,64 +62,69 @@ class ActionExecutor:
         self._step += 1
         path = self.session_dir / f"step_{self._step:04d}.png"
 
-        # Primary: screencapture (no permission dialog on GHA runners)
+        # Use -D 1 (capture display 1 by index) instead of the default window-
+        # compositor path.  The compositor path triggers the "bypass system
+        # private window server" dialog in macOS Sequoia whenever a system-owned
+        # window (security dialog, DRM surface, login window) is on screen —
+        # because compositing those requires an extra WindowServer privilege that
+        # kTCCServiceScreenCapture does not cover.
+        # -D 1 reads the raw display framebuffer and completely bypasses
+        # per-window privacy checks.  -x suppresses the shutter sound.
         try:
             subprocess.run(
-                ["screencapture", "-x", str(path)],
-                check=True,
-                timeout=10,
+                ["screencapture", "-D", "1", "-x", str(path)],
+                check=True, timeout=10,
             )
-            log.debug("Screenshot saved → %s (screencapture)", path.name)
+            log.debug("Screenshot → %s (screencapture -D 1)", path.name)
             return path
         except Exception as exc:
-            log.warning("screencapture failed (%s); falling back to pyautogui", exc)
+            log.warning("screencapture -D 1 failed (%s); fallback to pyautogui", exc)
 
-        # Fallback: pyautogui
+        # Fallback: pyautogui uses Quartz CGDisplayCreateImage internally,
+        # which is also a direct display capture and won't trigger the dialog.
         img = pyautogui.screenshot()
         img.save(str(path))
-        log.debug("Screenshot saved → %s (pyautogui)", path.name)
+        log.debug("Screenshot → %s (pyautogui fallback)", path.name)
         return path
 
-    # ── Mouse actions ─────────────────────────────────────────────────────────
+    # ── Mouse ─────────────────────────────────────────────────────────────────
 
-    def click(self, x: int, y: int, button: str = "left") -> str:
-        log.info("click(%d, %d, %s)", x, y, button)
-        pyautogui.click(x, y, button=button)
-        return f"Clicked {button} at ({x}, {y})"
+    def click(self, x: float, y: float, button: str = "left") -> str:
+        ax, ay = self._resolve(x, y)
+        log.info("click(%s,%s → %d,%d, %s)", x, y, ax, ay, button)
+        pyautogui.click(ax, ay, button=button)
+        return f"Clicked {button} at ({ax}, {ay})"
 
-    def double_click(self, x: int, y: int) -> str:
-        log.info("double_click(%d, %d)", x, y)
-        pyautogui.doubleClick(x, y)
-        return f"Double-clicked at ({x}, {y})"
+    def double_click(self, x: float, y: float) -> str:
+        ax, ay = self._resolve(x, y)
+        log.info("double_click(%s,%s → %d,%d)", x, y, ax, ay)
+        pyautogui.doubleClick(ax, ay)
+        return f"Double-clicked at ({ax}, {ay})"
 
-    def right_click(self, x: int, y: int) -> str:
-        log.info("right_click(%d, %d)", x, y)
-        pyautogui.rightClick(x, y)
-        return f"Right-clicked at ({x}, {y})"
+    def right_click(self, x: float, y: float) -> str:
+        ax, ay = self._resolve(x, y)
+        log.info("right_click(%s,%s → %d,%d)", x, y, ax, ay)
+        pyautogui.rightClick(ax, ay)
+        return f"Right-clicked at ({ax}, {ay})"
 
-    def drag(
-        self,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
-        duration: float = 0.5,
-    ) -> str:
-        log.info("drag(%d,%d → %d,%d)", x1, y1, x2, y2)
-        pyautogui.moveTo(x1, y1)
-        pyautogui.dragTo(x2, y2, duration=duration, button="left")
-        return f"Dragged ({x1},{y1}) → ({x2},{y2})"
+    def drag(self, x1: float, y1: float, x2: float, y2: float, duration: float = 0.5) -> str:
+        ax1, ay1 = self._resolve(x1, y1)
+        ax2, ay2 = self._resolve(x2, y2)
+        log.info("drag(%s,%s → %s,%s  resolved %d,%d → %d,%d)", x1, y1, x2, y2, ax1, ay1, ax2, ay2)
+        pyautogui.moveTo(ax1, ay1)
+        pyautogui.dragTo(ax2, ay2, duration=duration, button="left")
+        return f"Dragged ({ax1},{ay1}) → ({ax2},{ay2})"
 
-    def scroll(self, x: int, y: int, clicks: int) -> str:
-        log.info("scroll(%d, %d, clicks=%d)", x, y, clicks)
-        pyautogui.scroll(clicks, x=x, y=y)
-        return f"Scrolled {clicks} clicks at ({x}, {y})"
+    def scroll(self, x: float, y: float, clicks: int) -> str:
+        ax, ay = self._resolve(x, y)
+        log.info("scroll(%s,%s → %d,%d, clicks=%d)", x, y, ax, ay, clicks)
+        pyautogui.scroll(clicks, x=ax, y=ay)
+        return f"Scrolled {clicks} at ({ax}, {ay})"
 
-    # ── Keyboard actions ──────────────────────────────────────────────────────
+    # ── Keyboard ──────────────────────────────────────────────────────────────
 
     def type_text(self, text: str) -> str:
         log.info("type_text(%r)", text[:60] + ("…" if len(text) > 60 else ""))
-        # Handle embedded newlines as Return key presses
         parts = text.split("\n")
         for i, part in enumerate(parts):
             if part:
@@ -114,10 +134,6 @@ class ActionExecutor:
         return f"Typed {len(text)} characters"
 
     def key(self, keys: str) -> str:
-        """
-        Accept 'command+s', 'return', 'escape', 'tab', etc.
-        Splits on '+' and calls pyautogui.hotkey(*parts).
-        """
         log.info("key(%r)", keys)
         parts = [k.strip().lower() for k in keys.split("+")]
         if len(parts) == 1:
@@ -129,22 +145,11 @@ class ActionExecutor:
     # ── Dispatcher ────────────────────────────────────────────────────────────
 
     def execute(self, tool_name: str, args: dict, post_delay: float = 1.5) -> str:
-        """
-        Dispatch a tool call and return a human-readable result string.
-        `post_delay` is the settle time in seconds after each action.
-        """
-        result: str
-
         if tool_name == "screenshot":
             path = self.take_screenshot()
-            result = f"Screenshot captured → {path}"
-            # No extra delay needed — screenshot is already the observation
-            return result
-
+            return f"Screenshot captured → {path}"
         elif tool_name == "click":
-            result = self.click(
-                args["x"], args["y"], args.get("button", "left")
-            )
+            result = self.click(args["x"], args["y"], args.get("button", "left"))
         elif tool_name == "double_click":
             result = self.double_click(args["x"], args["y"])
         elif tool_name == "right_click":
@@ -161,7 +166,6 @@ class ActionExecutor:
                 args.get("duration", 0.5),
             )
         elif tool_name == "done":
-            # done is handled by the agent loop; just acknowledge here
             result = f"Task complete: {args.get('summary', '')}"
         else:
             result = f"Unknown tool: {tool_name}"

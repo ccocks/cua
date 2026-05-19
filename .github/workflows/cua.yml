@@ -126,7 +126,7 @@ jobs:
             "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture' ORDER BY client;"
 
           echo "=== Smoke test ==="
-          screencapture -x /tmp/tcc_test.png
+          screencapture -D 1 -x /tmp/tcc_test.png
           ls -lh /tmp/tcc_test.png
           # If the png is under ~50KB it's just a wallpaper (no windows captured).
           # A proper capture with UI elements is typically much larger.
