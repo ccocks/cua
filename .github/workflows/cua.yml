@@ -18,14 +18,13 @@ on:
 
 jobs:
   cua:
-    runs-on: macos-latest          # Real macOS display — no Xvfb needed
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ── Python ─────────────────────────────────────────────────────────────
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -33,112 +32,120 @@ jobs:
 
       - name: Install Python deps
         run: |
-          pip install --quiet \
-            pyautogui \
-            pillow \
-            openai \
-            tenacity
+          pip install --quiet pyautogui pillow openai tenacity
 
-      # ── macOS TCC bootstrap ─────────────────────────────────────────────────
-      # Writes directly to the user TCC database to pre-grant Screen Recording
-      # for every binary in the call chain, suppressing the
-      # "bash is requesting to bypass the system private window server" dialog.
+      # ── TCC bootstrap ───────────────────────────────────────────────────────
+      # Research basis: github.com/actions/runner-images blob/main/images/macos/
+      #   scripts/build/configure-tccdb-macos.sh
       #
-      # Design notes:
-      #   auth_value=2      → always allow
-      #   client_type=1     → path-based identity. Bundle-ID type (0) only
-      #                       applies to signed .app bundles; CI Python has none.
-      #   killall tccd      → tccd caches decisions in memory; kill it so it
-      #                       re-reads the DB. launchd restarts it instantly.
-      #   Schema stability  → the columns used here have been stable since macOS 11.
-      #                       The old `allowed` column was removed in Big Sur.
-      #   We do NOT use     → `tccutil reset ScreenCapture` because that nukes
-      #                       existing grants and re-triggers the dialog.
-      - name: Grant Screen Recording permission (suppress consent dialog)
+      # The official GHA runner image pre-bakes TCC grants at image-build time.
+      # The access table uses 17 positional columns (not the named subset we
+      # previously used). Mismatched column counts caused our INSERTs to silently
+      # fail or produce broken rows that tccd ignored.
+      #
+      # Column layout (17 cols, matching the official GHA script exactly):
+      #  1  service                          TEXT
+      #  2  client                           TEXT
+      #  3  client_type                      INT   (0=bundle, 1=path)
+      #  4  auth_value                       INT   (2=allow)
+      #  5  auth_reason                      INT   (0=user-set, 4=system)
+      #  6  auth_version                     INT   (1)
+      #  7  csreq                            BLOB  (NULL for path-based)
+      #  8  policy_id                        INT   (NULL)
+      #  9  indirect_object_identifier_type  INT   (NULL or 0)
+      # 10  indirect_object_identifier       TEXT  ('UNUSED' for non-AppleEvents)
+      # 11  flags                            INT   (NULL)
+      # 12  last_modified                    INT   (0 for path-based in official)
+      # 13  [timestamp1]                     INT   (epoch seconds)
+      # 14  NULL
+      # 15  NULL
+      # 16  'UNUSED'
+      # 17  [timestamp2]                     INT   (same epoch seconds, repeat)
+      #
+      # Why Python isn't already covered: the official image only pre-grants
+      # /bin/bash, /opt/hca/hosted-compute-agent, /usr/local/opt/runner/provisioner,
+      # /usr/bin/osascript, and com.apple.Terminal. Python binaries from
+      # setup-python land at a hostedtoolcache path that the image doesn't know
+      # at build time, so we must add them at runtime.
+      - name: Dump TCC schema and current ScreenCapture grants (diagnostic)
+        run: |
+          USER_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          SYS_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+          echo "=== User TCC schema ==="
+          sqlite3 "$USER_DB" ".schema access" || echo "(failed)"
+          echo "=== Current ScreenCapture grants (user DB) ==="
+          sqlite3 "$USER_DB" \
+            "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture';" \
+            || echo "(failed)"
+          echo "=== Current ScreenCapture grants (system DB) ==="
+          sudo sqlite3 "$SYS_DB" \
+            "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture';" \
+            || echo "(failed)"
+
+      - name: Grant ScreenCapture to Python (correct 17-column format)
         run: |
           set -euo pipefail
 
-          TCC_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          USER_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+          SYS_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+
           PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
           PYTHON_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+          TS="$(date +%s)"
 
-          grant() {
+          # Build a values string matching the official 17-column format exactly.
+          # auth_reason=0 matches how the official script registers /bin/bash.
+          make_row() {
             local client="$1"
-            echo "  granting ScreenCapture: $client"
-            sqlite3 "$TCC_DB" \
-              "INSERT OR REPLACE INTO access
-                 (service, client, client_type, auth_value, auth_reason,
-                  auth_version, indirect_object_identifier, flags, last_modified)
-               VALUES
-                 ('kTCCServiceScreenCapture',
-                  '$client', 1, 2, 4, 1, 'UNUSED', 0,
-                  strftime('%s','now'));"
+            echo "'kTCCServiceScreenCapture','${client}',1,2,0,1,NULL,NULL,NULL,'UNUSED',NULL,0,${TS},NULL,NULL,'UNUSED',${TS}"
           }
 
-          echo "=== Patching: $TCC_DB ==="
-          # Cover both shells GHA may use (bash on older runners, zsh on newer)
-          grant "/bin/bash"
-          grant "/bin/zsh"
-          # Python — shim path and real binary path may differ
-          grant "/usr/bin/python3"
-          grant "$PYTHON_BIN"
-          grant "$PYTHON_REAL"
-          # The actual capture binary
-          grant "/usr/sbin/screencapture"
+          grant_both() {
+            local row
+            row="$(make_row "$1")"
+            echo "  granting: $1"
+            sqlite3     "$USER_DB" "INSERT OR REPLACE INTO access VALUES(${row});" 2>&1 || echo "    user DB insert failed"
+            sudo sqlite3 "$SYS_DB" "INSERT OR REPLACE INTO access VALUES(${row});" 2>&1 || echo "    system DB insert failed"
+          }
 
-          echo "=== Patching system-level TCC DB ==="
-          # On newer GHA runner images, tccd validates against the SYSTEM-level
-          # TCC DB (/Library/...) rather than the user one.  We write to both.
-          # sudo is available on GHA macOS runners without a password.
-          SYS_TCC_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-          if [ -f "$SYS_TCC_DB" ]; then
-            sys_grant() {
-              local client="$1"
-              echo "  system-level grant: $client"
-              sudo sqlite3 "$SYS_TCC_DB"                 "INSERT OR REPLACE INTO access
-                   (service, client, client_type, auth_value, auth_reason,
-                    auth_version, indirect_object_identifier, flags, last_modified)
-                 VALUES
-                   ('kTCCServiceScreenCapture',
-                    '$client', 1, 2, 4, 1, 'UNUSED', 0,
-                    strftime('%s','now'));" 2>/dev/null || true
-            }
-            sys_grant "/bin/bash"
-            sys_grant "/bin/zsh"
-            sys_grant "/usr/bin/python3"
-            sys_grant "$PYTHON_BIN"
-            sys_grant "$PYTHON_REAL"
-            sys_grant "/usr/sbin/screencapture"
-          else
-            echo "  (no system TCC DB found — user DB only)"
+          echo "=== Adding Python ScreenCapture grants ==="
+          grant_both "$PYTHON_BIN"
+          # Only add PYTHON_REAL if it differs from PYTHON_BIN
+          if [ "$PYTHON_REAL" != "$PYTHON_BIN" ]; then
+            grant_both "$PYTHON_REAL"
           fi
+          # screencapture binary itself (runs as child of Python/bash)
+          grant_both "/usr/sbin/screencapture"
 
-          echo "=== Flushing tccd cache ==="
-          # Kill tccd so it re-reads both DBs instead of serving stale cache.
-          # launchd restarts it automatically within ~1 second.
+          echo "=== Flushing tccd ==="
           sudo killall tccd 2>/dev/null || killall tccd 2>/dev/null || true
           sleep 2
 
-          echo "=== Verifying grants ==="
-          sqlite3 "$TCC_DB" \
-            "SELECT client, auth_value FROM access
-             WHERE service='kTCCServiceScreenCapture'
-             ORDER BY client;"
+          echo "=== Verifying (user DB) ==="
+          sqlite3 "$USER_DB" \
+            "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture' ORDER BY client;"
 
           echo "=== Smoke test ==="
-          screencapture -x /tmp/tcc_test.png && echo "OK — screen capture works without dialog"
+          screencapture -x /tmp/tcc_test.png
+          ls -lh /tmp/tcc_test.png
+          # If the png is under ~50KB it's just a wallpaper (no windows captured).
+          # A proper capture with UI elements is typically much larger.
+          SIZE=$(stat -f%z /tmp/tcc_test.png)
+          echo "Screenshot size: ${SIZE} bytes"
+          if [ "$SIZE" -lt 50000 ]; then
+            echo "WARNING: Screenshot is small — may be wallpaper-only (TCC not fully effective)"
+          else
+            echo "OK — screenshot looks like a full desktop capture"
+          fi
 
-      # ── Run the agent ───────────────────────────────────────────────────────
       - name: Run CUA agent
         env:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           CUA_TASK: ${{ github.event.inputs.task }}
           CUA_MAX_STEPS: ${{ github.event.inputs.max_steps }}
           CUA_SCREENSHOT_INTERVAL: ${{ github.event.inputs.screenshot_interval }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python cua/agent.py
 
-      # ── Upload artefacts ─────────────────────────────────────────────────────
       - name: Upload session screenshots
         if: always()
         uses: actions/upload-artifact@v4
