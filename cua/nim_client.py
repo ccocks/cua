@@ -374,7 +374,7 @@ class NIMClient:
             "content": content,
         }
 
-    def trim_context(self, messages: list[dict], max_images: int = 8) -> list[dict]:
+    def trim_context(self, messages: list[dict], max_images: int = 5) -> list[dict]:
         """Trim message history to keep at most *max_images* screenshot observations.
 
         Preserves the system prompt and initial user task, then keeps only the

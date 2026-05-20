@@ -45,6 +45,9 @@ log = logging.getLogger(__name__)
 TASK = os.environ.get("CUA_TASK", "").strip()
 MAX_STEPS = int(os.environ.get("CUA_MAX_STEPS", "25"))
 SCREENSHOT_INTERVAL = float(os.environ.get("CUA_SCREENSHOT_INTERVAL", "1.5"))
+MAX_CONSECUTIVE_FAILURES = 3
+
+VALID_TOOLS = frozenset({"screenshot", "click", "double_click", "type_text", "key", "done"})
 
 
 def _tcc_prime(executor: ActionExecutor) -> None:
@@ -106,6 +109,7 @@ def _run_agent_loop(task: str) -> None:
 
     step = 0
     done = False
+    consecutive_failures = 0
     latest_screenshot: Path | None = None
 
     while step < MAX_STEPS and not done:
@@ -133,9 +137,26 @@ def _run_agent_loop(task: str) -> None:
 
         tool_calls = client.parse_tool_calls(response)
 
+        # ── Retry: no tool calls or all-gibberish ───────────────────────────
         if not tool_calls:
-            log.warning("Model returned no tool calls — stopping.")
-            break
+            consecutive_failures += 1
+            feedback = "You did not call any tool. Call screenshot to see the screen, or done(summary=...) when finished."
+        elif all(name not in VALID_TOOLS for name, _ in tool_calls):
+            bad = ", ".join(name for name, _ in tool_calls)
+            consecutive_failures += 1
+            feedback = f"Unknown tool(s): {bad}. Available tools: screenshot, click, double_click, type_text, key, done."
+        else:
+            consecutive_failures = 0
+
+        if consecutive_failures:
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                log.warning("Too many consecutive failures (%d) — stopping.", consecutive_failures)
+                break
+            log.info("Retry #%d: %s", consecutive_failures, feedback)
+            messages.append({"role": "user", "content": feedback})
+            # Don't count this as a real step
+            step -= 1
+            continue
 
         # ── Execute each tool call ────────────────────────────────────────────
         for tc_name, tc_args in tool_calls:
