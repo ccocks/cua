@@ -65,8 +65,15 @@ def _tcc_prime(executor: ActionExecutor) -> None:
     tmp.unlink(missing_ok=True)
 
     time.sleep(1.5)
-    log.info("Clicked left at (510, 354)")
-    executor.click([510, 354])
+    script_dir = Path(__file__).parent
+    allow_btn = script_dir / "allow_button.png"
+    if allow_btn.exists():
+        log.info("Looking for allow button via image: %s", allow_btn)
+        executor.click_image(allow_btn)
+    else:
+        log.warning("allow_button.png not found — falling back to coordinates")
+        log.info("Clicked left at (510, 354)")
+        executor.click([510, 354])
     time.sleep(1)
     executor.take_screenshot()
 

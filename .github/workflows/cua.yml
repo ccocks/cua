@@ -30,50 +30,35 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install system deps (ffmpeg)
-        run: brew install ffmpeg
-
-      - name: Install Python deps
+      - name: Install deps (brew + pip) and configure TCC — all in parallel
         run: |
-          pip install --quiet pyautogui pillow openai tenacity
+          set -euo pipefail
 
-      # ── TCC bootstrap ───────────────────────────────────────────────────────
-      # Research basis: github.com/actions/runner-images blob/main/images/macos/
-      #   scripts/build/configure-tccdb-macos.sh
-      #
-      # The official GHA runner image pre-bakes TCC grants at image-build time.
-      # The access table uses 17 positional columns (not the named subset we
-      # previously used). Mismatched column counts caused our INSERTs to silently
-      # fail or produce broken rows that tccd ignored.
-      #
-      # Column layout (17 cols, matching the official GHA script exactly):
-      #  1  service                          TEXT
-      #  2  client                           TEXT
-      #  3  client_type                      INT   (0=bundle, 1=path)
-      #  4  auth_value                       INT   (2=allow)
-      #  5  auth_reason                      INT   (0=user-set, 4=system)
-      #  6  auth_version                     INT   (1)
-      #  7  csreq                            BLOB  (NULL for path-based)
-      #  8  policy_id                        INT   (NULL)
-      #  9  indirect_object_identifier_type  INT   (NULL or 0)
-      # 10  indirect_object_identifier       TEXT  ('UNUSED' for non-AppleEvents)
-      # 11  flags                            INT   (NULL)
-      # 12  last_modified                    INT   (0 for path-based in official)
-      # 13  [timestamp1]                     INT   (epoch seconds)
-      # 14  NULL
-      # 15  NULL
-      # 16  'UNUSED'
-      # 17  [timestamp2]                     INT   (same epoch seconds, repeat)
-      #
-      # Why Python isn't already covered: the official image only pre-grants
-      # /bin/bash, /opt/hca/hosted-compute-agent, /usr/local/opt/runner/provisioner,
-      # /usr/bin/osascript, and com.apple.Terminal. Python binaries from
-      # setup-python land at a hostedtoolcache path that the image doesn't know
-      # at build time, so we must add them at runtime.
-      - name: Dump TCC schema and current ScreenCapture grants (diagnostic)
-        run: |
+          # ── Background: brew install ffmpeg (skip if already present) ──
+          if ! command -v ffmpeg &>/dev/null; then
+            brew install ffmpeg &
+            BREW_PID=$!
+          else
+            echo "ffmpeg already available, skipping brew"
+            BREW_PID=""
+          fi
+
+          # ── Background: pip install Python deps ──
+          pip install --quiet pyautogui pillow openai tenacity &
+          PIP_PID=$!
+
+          # ── TCC ScreenCapture grants (runs concurrently with above) ──
+          # Research basis: github.com/actions/runner-images blob/main/images/macos/
+          #   scripts/build/configure-tccdb-macos.sh
+          #
+          # The official GHA runner image pre-bakes TCC grants at image-build time.
+          # The access table uses 17 positional columns — full docs at the URL above.
+          # Python binaries from setup-python land at a hostedtoolcache path that the
+          # image doesn't know at build time, so we must add them at runtime.
+
           USER_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
           SYS_DB="/Library/Application Support/com.apple.TCC/TCC.db"
+
           echo "=== User TCC schema ==="
           sqlite3 "$USER_DB" ".schema access" || echo "(failed)"
           echo "=== Current ScreenCapture grants (user DB) ==="
@@ -85,19 +70,10 @@ jobs:
             "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture';" \
             || echo "(failed)"
 
-      - name: Grant ScreenCapture to Python (correct 17-column format)
-        run: |
-          set -euo pipefail
-
-          USER_DB="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
-          SYS_DB="/Library/Application Support/com.apple.TCC/TCC.db"
-
           PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
           PYTHON_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')"
           TS="$(date +%s)"
 
-          # Build a values string matching the official 17-column format exactly.
-          # auth_reason=0 matches how the official script registers /bin/bash.
           make_row() {
             local client="$1"
             echo "'kTCCServiceScreenCapture','${client}',1,2,0,1,NULL,NULL,NULL,'UNUSED',NULL,0,${TS},NULL,NULL,'UNUSED',${TS}"
@@ -113,11 +89,9 @@ jobs:
 
           echo "=== Adding Python ScreenCapture grants ==="
           grant_both "$PYTHON_BIN"
-          # Only add PYTHON_REAL if it differs from PYTHON_BIN
           if [ "$PYTHON_REAL" != "$PYTHON_BIN" ]; then
             grant_both "$PYTHON_REAL"
           fi
-          # screencapture binary itself (runs as child of Python/bash)
           grant_both "/usr/sbin/screencapture"
 
           echo "=== Flushing tccd ==="
@@ -128,11 +102,21 @@ jobs:
           sqlite3 "$USER_DB" \
             "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture' ORDER BY client;"
 
+          # ── Wait for background installs to finish ──
+          echo "=== Waiting for brew install ffmpeg ==="
+          if [ -n "$BREW_PID" ]; then
+            wait "$BREW_PID" || { echo "brew install failed"; exit 1; }
+          fi
+          echo "=== Waiting for pip install ==="
+          wait "$PIP_PID" || { echo "pip install failed"; exit 1; }
+          echo "=== All installs complete ==="
+
+          # ── Verify Python deps and smoke-test screenshot ──
+          python3 -c "import pyautogui; print('pyautogui ready')"
+
           echo "=== Smoke test ==="
           screencapture -D 1 -x /tmp/tcc_test.png
           ls -lh /tmp/tcc_test.png
-          # If the png is under ~50KB it's just a wallpaper (no windows captured).
-          # A proper capture with UI elements is typically much larger.
           SIZE=$(stat -f%z /tmp/tcc_test.png)
           echo "Screenshot size: ${SIZE} bytes"
           if [ "$SIZE" -lt 50000 ]; then

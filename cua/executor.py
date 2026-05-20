@@ -35,6 +35,18 @@ class ActionExecutor:
         log.debug("Screenshot -> %s", path.name)
         return path
 
+    def click_image(self, image_path: str | Path, button: str = "left", confidence: float = 0.8) -> str:
+        img = str(image_path)
+        pos = pyautogui.locateCenterOnScreen(img, confidence=confidence)
+        if pos is None:
+            msg = f"Image not found on screen: {img}"
+            log.warning(msg)
+            return msg
+        pyautogui.click(pos.x, pos.y, button=button)
+        msg = f"click {button} at ({pos.x}, {pos.y}) via {Path(img).name}"
+        log.info(msg)
+        return msg
+
     def click(self, position: list[float], button: str = "left") -> str:
         x, y = position[0], position[1]
         ax, ay = self._resolve(x, y)
