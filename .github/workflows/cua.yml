@@ -30,6 +30,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install system deps (ffmpeg)
+        run: brew install ffmpeg
+
       - name: Install Python deps
         run: |
           pip install --quiet pyautogui pillow openai tenacity

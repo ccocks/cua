@@ -159,8 +159,10 @@ def _run_agent_loop(task: str) -> None:
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                     log.warning("Too many consecutive failures (%d) — stopping.", consecutive_failures)
                     break
-                log.info("Retry #%d: %s", consecutive_failures, feedback)
+                backoff = 2 ** (consecutive_failures - 1)
+                log.info("Retry #%d (backoff %ds): %s", consecutive_failures, backoff, feedback)
                 messages.append({"role": "user", "content": feedback})
+                time.sleep(backoff)
                 step -= 1
                 continue
 
