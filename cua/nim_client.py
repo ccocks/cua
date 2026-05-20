@@ -34,16 +34,14 @@ KIMI_MODEL = "moonshotai/kimi-k2.6"
 
 
 # ── CUA tool definitions ──────────────────────────────────────────────────────
+# NOTE: keep this list SHORT. Every extra tool adds cognitive load on the model
+# and increases the chance of malformed JSON arguments.
 TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
             "name": "screenshot",
-            "description": (
-                "Capture the current state of the screen. "
-                "Call this whenever you need to see what's on screen "
-                "before deciding the next action."
-            ),
+            "description": "Show the current screen. Call this first, and after every action that changes the screen.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -51,16 +49,16 @@ TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "click",
-            "description": "Single mouse click at screen coordinates.",
+            "description": "Click at a position on screen. x,y can be pixel coordinates OR a decimal between 0-1 (normalized).",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "x": {"type": "integer", "description": "X coordinate in pixels"},
-                    "y": {"type": "integer", "description": "Y coordinate in pixels"},
+                    "x": {"type": "number", "description": "X position — pixel coordinate (e.g. 500) or normalized 0-1 (e.g. 0.25)"},
+                    "y": {"type": "number", "description": "Y position — same format as x"},
                     "button": {
                         "type": "string",
                         "enum": ["left", "right", "middle"],
-                        "description": "Mouse button to press (default: left)",
+                        "description": "Mouse button (default: left)",
                     },
                 },
                 "required": ["x", "y"],
@@ -71,27 +69,12 @@ TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "double_click",
-            "description": "Double-click at screen coordinates.",
+            "description": "Double-click at a position. Same coordinate format as click.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                },
-                "required": ["x", "y"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "right_click",
-            "description": "Right-click at screen coordinates.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
+                    "x": {"type": "number", "description": "X position"},
+                    "y": {"type": "number", "description": "Y position"},
                 },
                 "required": ["x", "y"],
             },
@@ -101,13 +84,13 @@ TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "type_text",
-            "description": "Type a string of text at the current focus location.",
+            "description": "Type characters at the current cursor location.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "text": {
                         "type": "string",
-                        "description": "Text to type. Use \\n for Enter.",
+                        "description": "Text to type. Use \\n for Enter/Return.",
                     }
                 },
                 "required": ["text"],
@@ -118,17 +101,13 @@ TOOLS: list[dict] = [
         "type": "function",
         "function": {
             "name": "key",
-            "description": (
-                "Press a key or key combination. "
-                "Use pyautogui hotkey names joined by '+', e.g. 'command+s', "
-                "'return', 'escape', 'tab', 'space', 'delete'."
-            ),
+            "description": "Press a key or keyboard shortcut. Join modifier keys with '+'. Valid key names: command, option, shift, control, return, escape, tab, space, delete, up, down, left, right.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "keys": {
                         "type": "string",
-                        "description": "Key combo string, e.g. 'command+s'",
+                        "description": "Key(s) to press, e.g. 'command+s' to save, 'return' to press Enter, 'escape' to press Esc.",
                     }
                 },
                 "required": ["keys"],
@@ -138,51 +117,8 @@ TOOLS: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "scroll",
-            "description": "Scroll the mouse wheel at a given position.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x": {"type": "integer", "description": "X coordinate to scroll at"},
-                    "y": {"type": "integer", "description": "Y coordinate to scroll at"},
-                    "clicks": {
-                        "type": "integer",
-                        "description": "Number of scroll clicks. Positive = up, negative = down.",
-                    },
-                },
-                "required": ["x", "y", "clicks"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "drag",
-            "description": "Click-drag from one screen position to another.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "x1": {"type": "integer", "description": "Start X"},
-                    "y1": {"type": "integer", "description": "Start Y"},
-                    "x2": {"type": "integer", "description": "End X"},
-                    "y2": {"type": "integer", "description": "End Y"},
-                    "duration": {
-                        "type": "number",
-                        "description": "Drag duration in seconds (default 0.5)",
-                    },
-                },
-                "required": ["x1", "y1", "x2", "y2"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "done",
-            "description": (
-                "Signal that the task is complete. "
-                "Call this as soon as the task goal is fully achieved."
-            ),
+            "description": "Call this when the task is finished.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -199,17 +135,23 @@ TOOLS: list[dict] = [
 
 SYSTEM_PROMPT = """\
 You are a computer-use agent controlling a real macOS desktop.
-You receive screenshots and must decide which UI actions to take to complete the user's task.
+You see screenshots and decide which tool to call next.
+
+Available tools:
+- screenshot: see the screen (call this first, and after every action)
+- click(x, y, button="left"): click at a position
+- double_click(x, y): double-click at a position
+- type_text(text): type characters
+- key(keys): press a key or keyboard shortcut
+- done(summary): signal task complete
 
 Rules:
-1. Always call `screenshot` first to see the current state of the screen.
-2. Plan actions step by step; take one action at a time.
-3. Prefer clicking UI elements over keyboard shortcuts unless keyboard is clearer.
-4. After any action that changes the screen (click, type, key), call `screenshot` again.
-5. When the task is fully done, call `done` with a concise summary.
-6. If you are stuck (same screen after 3 tries), explain why in `done` with status "stuck".
-7. macOS key names: use "command" not "ctrl", "option" not "alt", "delete" for Backspace.
-8. Do not hallucinate UI elements; only interact with what you can see on screen.
+1. Start every task with screenshot.
+2. After click, double_click, type_text, or key, call screenshot again.
+3. x/y coordinates: use pixels (e.g. 500, 300) OR a decimal between 0 and 1 (e.g. 0.5, 0.33). Both work.
+4. macOS: use "command" not "ctrl", "option" not "alt".
+5. When finished, call done(summary="what was done").
+6. If stuck (same screen >3 attempts), call done(summary="Stuck: reason").
 """
 
 
@@ -257,15 +199,35 @@ class NIMClient:
             log.warning("Response hit max_tokens — consider raising it further.")
         return response
 
+    @staticmethod
+    def _repair_json(raw: str) -> str:
+        """Try to fix common JSON generation issues from LLMs."""
+        s = raw.strip()
+        # Some models wrap JSON in ```json ... ``` fences
+        if "```" in s:
+            for marker in ("```json\n", "```\n", "```"):
+                if marker in s:
+                    s = s.split(marker, 1)[-1]
+            s = s.rsplit("```", 1)[0].strip()
+        # Remove trailing commas before closing braces/brackets
+        s = s.replace(",\n}", "\n}").replace(",}", "}").replace(",\n]", "\n]").replace(",]", "]")
+        return s
+
     def parse_tool_calls(self, response: Any) -> list[tuple[str, dict]]:
         """Extract [(tool_name, args_dict), ...] from a response."""
         choice = response.choices[0]
         calls = []
         if choice.message.tool_calls:
             for tc in choice.message.tool_calls:
+                raw = tc.function.arguments or "{}"
+                fixed = self._repair_json(raw)
                 try:
-                    args = json.loads(tc.function.arguments or "{}")
+                    args = json.loads(fixed)
                 except json.JSONDecodeError:
+                    log.warning("Failed to parse args for %s: %r — falling back to {}", tc.function.name, raw)
+                    args = {}
+                if not isinstance(args, dict):
+                    log.warning("Args for %s is not a dict: %r — resetting", tc.function.name, args)
                     args = {}
                 calls.append((tc.function.name, args))
         return calls
