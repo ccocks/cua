@@ -37,9 +37,11 @@ class ScreenRecorder:
             "-capture_cursor", "1",
             "-i", screen_idx,
             "-r", "5",
+            "-pix_fmt", "yuv420p",
             "-vcodec", "libx264",
             "-crf", "28",
             "-preset", "ultrafast",
+            "-movflags", "+faststart",
             "-y",
             str(self.output_path),
         ]
