@@ -23,6 +23,7 @@ from pathlib import Path
 
 from executor import ActionExecutor
 from nim_client import NIMClient, SYSTEM_PROMPT
+from screen_recorder import ScreenRecorder
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -88,111 +89,119 @@ def _run_agent_loop(task: str) -> None:
     client = NIMClient()
     executor = ActionExecutor(session_dir=SESSION_DIR)
 
-    _tcc_prime(executor)
+    # ── Screen recording ─────────────────────────────────────────────────────
+    video_path = SESSION_DIR / "recording.mp4"
+    recorder = ScreenRecorder(output_path=video_path)
+    recorder.start()
 
-    # ── Conversation history ──────────────────────────────────────────────────
-    messages: list[dict] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"Your task:\n{task}\n\n"
-                        "Start by calling `screenshot` to see the current screen."
-                    ),
-                }
-            ],
-        },
-    ]
+    try:
+        _tcc_prime(executor)
 
-    step = 0
-    done = False
-    consecutive_failures = 0
-    latest_screenshot: Path | None = None
+        # ── Conversation history ──────────────────────────────────────────────
+        messages: list[dict] = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Your task:\n{task}\n\n"
+                            "Start by calling `screenshot` to see the current screen."
+                        ),
+                    }
+                ],
+            },
+        ]
 
-    while step < MAX_STEPS and not done:
-        step += 1
-        log.info("── Step %d / %d ──────────────────────────", step, MAX_STEPS)
+        step = 0
+        done = False
+        consecutive_failures = 0
+        latest_screenshot: Path | None = None
 
-        # ── Call the model ────────────────────────────────────────────────────
-        if latest_screenshot:
-            messages.append(client.screenshot_observation_message(latest_screenshot))
-            latest_screenshot = None
+        while step < MAX_STEPS and not done:
+            step += 1
+            log.info("── Step %d / %d ──────────────────────────", step, MAX_STEPS)
 
-        messages = client.trim_context(messages)
+            # ── Call the model ────────────────────────────────────────────────
+            if latest_screenshot:
+                messages.append(client.screenshot_observation_message(latest_screenshot))
+                latest_screenshot = None
 
-        try:
-            response = client.chat(messages)
-        except Exception as exc:
-            log.error("NIM API error: %s", exc)
-            sys.exit(2)
+            messages = client.trim_context(messages)
 
-        assistant_msg = client.assistant_message_dict(response)
-        messages.append(assistant_msg)
+            try:
+                response = client.chat(messages)
+            except Exception as exc:
+                log.error("NIM API error: %s", exc)
+                sys.exit(2)
 
-        if assistant_msg.get("content"):
-            log.info("Model: %s", assistant_msg["content"])
+            assistant_msg = client.assistant_message_dict(response)
+            messages.append(assistant_msg)
 
-        tool_calls = client.parse_tool_calls(response)
+            if assistant_msg.get("content"):
+                log.info("Model: %s", assistant_msg["content"])
 
-        # ── Retry: no tool calls or all-gibberish ───────────────────────────
-        if not tool_calls:
-            consecutive_failures += 1
-            feedback = "You did not call any tool. Call screenshot to see the screen, or done(summary=...) when finished."
-        elif all(name not in VALID_TOOLS for name, _ in tool_calls):
-            bad = ", ".join(name for name, _ in tool_calls)
-            consecutive_failures += 1
-            feedback = f"Unknown tool(s): {bad}. Available tools: screenshot, click, double_click, type_text, key, done."
-        else:
-            consecutive_failures = 0
+            tool_calls = client.parse_tool_calls(response)
 
-        if consecutive_failures:
-            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                log.warning("Too many consecutive failures (%d) — stopping.", consecutive_failures)
-                break
-            log.info("Retry #%d: %s", consecutive_failures, feedback)
-            messages.append({"role": "user", "content": feedback})
-            # Don't count this as a real step
-            step -= 1
-            continue
-
-        # ── Execute each tool call ────────────────────────────────────────────
-        for tc_name, tc_args in tool_calls:
-            log.info("Tool call: %s(%s)", tc_name, json.dumps(tc_args, ensure_ascii=False))
-
-            if not isinstance(tc_args, dict):
-                log.warning("Tool args not a dict (%r) — resetting to {}", tc_args, {})
-                tc_args = {}
-
-            if tc_name == "done":
-                summary = tc_args.get("summary", "(no summary)")
-                log.info("DONE — %s", summary)
-                done = True
-                result_str = f"Task complete: {summary}"
-            elif tc_name == "screenshot":
-                latest_screenshot = executor.take_screenshot()
-                result_str = f"Screenshot captured -> {latest_screenshot}"
-                log.info(result_str)
-            elif tc_name in ("click", "double_click", "type_text", "key"):
-                result_str = executor.execute(
-                    tc_name, tc_args, post_delay=SCREENSHOT_INTERVAL
-                )
-                log.info("Result: %s", result_str)
-                latest_screenshot = executor.take_screenshot()
+            # ── Retry: no tool calls or all-gibberish ─────────────────────────
+            if not tool_calls:
+                consecutive_failures += 1
+                feedback = "You did not call any tool. Call screenshot to see the screen, or done(summary=...) when finished."
+            elif all(name not in VALID_TOOLS for name, _ in tool_calls):
+                bad = ", ".join(name for name, _ in tool_calls)
+                consecutive_failures += 1
+                feedback = f"Unknown tool(s): {bad}. Available tools: screenshot, click, double_click, type_text, key, done."
             else:
-                log.warning("Unknown tool call: %s — ignoring", tc_name)
-                result_str = f"Unknown tool: {tc_name}"
+                consecutive_failures = 0
 
-            tc_id = _find_tool_call_id(assistant_msg, tc_name)
-            messages.append(client.tool_result_message(tc_id, result_str))
+            if consecutive_failures:
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    log.warning("Too many consecutive failures (%d) — stopping.", consecutive_failures)
+                    break
+                log.info("Retry #%d: %s", consecutive_failures, feedback)
+                messages.append({"role": "user", "content": feedback})
+                step -= 1
+                continue
 
-            if done:
-                break
+            # ── Execute each tool call ────────────────────────────────────────
+            for tc_name, tc_args in tool_calls:
+                log.info("Tool call: %s(%s)", tc_name, json.dumps(tc_args, ensure_ascii=False))
 
-    if not done:
-        log.warning("Max steps (%d) reached without 'done' signal.", MAX_STEPS)
+                if not isinstance(tc_args, dict):
+                    log.warning("Tool args not a dict (%r) — resetting to {}", tc_args, {})
+                    tc_args = {}
+
+                if tc_name == "done":
+                    summary = tc_args.get("summary", "(no summary)")
+                    log.info("DONE — %s", summary)
+                    done = True
+                    result_str = f"Task complete: {summary}"
+                elif tc_name == "screenshot":
+                    latest_screenshot = executor.take_screenshot()
+                    result_str = f"Screenshot captured -> {latest_screenshot}"
+                    log.info(result_str)
+                elif tc_name in ("click", "double_click", "type_text", "key"):
+                    result_str = executor.execute(
+                        tc_name, tc_args, post_delay=SCREENSHOT_INTERVAL
+                    )
+                    log.info("Result: %s", result_str)
+                    latest_screenshot = executor.take_screenshot()
+                else:
+                    log.warning("Unknown tool call: %s — ignoring", tc_name)
+                    result_str = f"Unknown tool: {tc_name}"
+
+                tc_id = _find_tool_call_id(assistant_msg, tc_name)
+                messages.append(client.tool_result_message(tc_id, result_str))
+
+                if done:
+                    break
+
+        if not done:
+            log.warning("Max steps (%d) reached without 'done' signal.", MAX_STEPS)
+
+    finally:
+        recorder.stop()
 
     log.info("Session screenshots → %s", SESSION_DIR)
     log.info("Total steps executed: %d", step)

@@ -152,6 +152,7 @@ jobs:
         with:
           name: cua-session-screenshots
           path: /tmp/cua_session/
+          retention-days: 1
           if-no-files-found: ignore
 
       - name: Upload session log
@@ -160,4 +161,5 @@ jobs:
         with:
           name: cua-session-log
           path: /tmp/cua_session/session.log
+          retention-days: 1
           if-no-files-found: ignore
