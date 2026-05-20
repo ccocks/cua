@@ -35,14 +35,16 @@ class ActionExecutor:
         log.debug("Screenshot -> %s", path.name)
         return path
 
-    def click(self, x: float, y: float, button: str = "left") -> str:
+    def click(self, position: list[float], button: str = "left") -> str:
+        x, y = position[0], position[1]
         ax, ay = self._resolve(x, y)
         pyautogui.click(ax, ay, button=button)
         msg = f"click {button} at ({ax}, {ay})"
         log.info(msg)
         return msg
 
-    def double_click(self, x: float, y: float) -> str:
+    def double_click(self, position: list[float]) -> str:
+        x, y = position[0], position[1]
         ax, ay = self._resolve(x, y)
         pyautogui.doubleClick(ax, ay)
         msg = f"double_click at ({ax}, {ay})"
@@ -71,10 +73,10 @@ class ActionExecutor:
     def execute(self, tool_name: str, args: dict, post_delay: float = 1.5) -> str:
         dispatch = {
             "click": lambda: self.click(
-                args.get("x", 0), args.get("y", 0), args.get("button", "left")
+                args.get("position", [0, 0]), args.get("button", "left")
             ),
             "double_click": lambda: self.double_click(
-                args.get("x", 0), args.get("y", 0)
+                args.get("position", [0, 0])
             ),
             "type_text": lambda: self.type_text(args.get("text", "")),
             "key": lambda: self.key(args.get("keys", "")),

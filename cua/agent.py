@@ -62,7 +62,7 @@ def _tcc_prime(executor: ActionExecutor) -> None:
 
     time.sleep(1.5)
     log.info("Clicked left at (510, 354)")
-    executor.click(510, 354)
+    executor.click([510, 354])
     time.sleep(1)
     executor.take_screenshot()
 
