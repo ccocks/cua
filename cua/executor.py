@@ -1,7 +1,7 @@
 """
 executor.py
 ───────────
-Translates CUA tool-call dicts into real pyautogui / subprocess actions.
+Translates CUA tool-call dicts into real pyautogui actions.
 
 Coordinate handling
 ───────────────────
@@ -9,17 +9,11 @@ The model sometimes outputs normalized floats in [0, 1] instead of absolute
 pixel coordinates.  _resolve() detects this and converts automatically, so
 either format works.  The model is instructed to use absolute pixels in the
 system prompt, but this is a safety net.
-
-macOS notes
-───────────
-• Screenshots use `screencapture -x` (silent) as primary; pyautogui fallback.
-• Key combos use pyautogui.hotkey(*parts) which maps correctly on macOS.
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
 import time
 from pathlib import Path
 
@@ -62,29 +56,9 @@ class ActionExecutor:
         self._step += 1
         path = self.session_dir / f"step_{self._step:04d}.png"
 
-        # Use -D 1 (capture display 1 by index) instead of the default window-
-        # compositor path.  The compositor path triggers the "bypass system
-        # private window server" dialog in macOS Sequoia whenever a system-owned
-        # window (security dialog, DRM surface, login window) is on screen —
-        # because compositing those requires an extra WindowServer privilege that
-        # kTCCServiceScreenCapture does not cover.
-        # -D 1 reads the raw display framebuffer and completely bypasses
-        # per-window privacy checks.  -x suppresses the shutter sound.
-        try:
-            subprocess.run(
-                ["screencapture", "-D", "1", "-x", str(path)],
-                check=True, timeout=10,
-            )
-            log.debug("Screenshot → %s (screencapture -D 1)", path.name)
-            return path
-        except Exception as exc:
-            log.warning("screencapture -D 1 failed (%s); fallback to pyautogui", exc)
-
-        # Fallback: pyautogui uses Quartz CGDisplayCreateImage internally,
-        # which is also a direct display capture and won't trigger the dialog.
         img = pyautogui.screenshot()
         img.save(str(path))
-        log.debug("Screenshot → %s (pyautogui fallback)", path.name)
+        log.debug("Screenshot → %s (pyautogui)", path.name)
         return path
 
     # ── Mouse ─────────────────────────────────────────────────────────────────
