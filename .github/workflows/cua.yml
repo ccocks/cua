@@ -44,7 +44,7 @@ jobs:
           fi
 
           # ── Background: pip install Python deps ──
-          pip install --quiet pyautogui pillow openai tenacity &
+          pip install --quiet pyautogui pillow openai tenacity opencv-python &
           PIP_PID=$!
 
           # ── TCC ScreenCapture grants (runs concurrently with above) ──
