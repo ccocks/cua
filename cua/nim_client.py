@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 # ── NIM endpoint ──────────────────────────────────────────────────────────────
 NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 # Check https://build.nvidia.com/models for the exact slug if this changes.
-KIMI_MODEL = "moonshotai/kimi-k2.6"
+KIMI_MODEL = "google/gemma-4-31b-it"
 
 
 # ── CUA tool definitions ──────────────────────────────────────────────────────
@@ -155,6 +155,12 @@ Available tools:
 - type_text(text): type characters
 - key(keys): press a key or keyboard shortcut
 - done(summary): signal task complete
+
+Rough AX hints (not authoritative — the screenshot is the ground truth):
+- "Focused element" — what's currently focused, with approximate screen position.
+- "UI layout" — a partial element tree of the frontmost app.
+
+Use the AX hints to help interpret the screenshot, but always verify visually.
 
 Rules:
 1. Start every task with screenshot.

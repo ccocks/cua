@@ -44,7 +44,7 @@ jobs:
           fi
 
           # ── Background: pip install Python deps ──
-          pip install --quiet pyautogui pillow openai tenacity opencv-python &
+          pip install --quiet pyautogui pillow openai tenacity opencv-python pyobjc-framework-cocoa pyobjc-framework-quartz &
           PIP_PID=$!
 
           # ── TCC ScreenCapture grants (runs concurrently with above) ──
@@ -75,32 +75,42 @@ jobs:
           TS="$(date +%s)"
 
           make_row() {
-            local client="$1"
-            echo "'kTCCServiceScreenCapture','${client}',1,2,0,1,NULL,NULL,NULL,'UNUSED',NULL,0,${TS},NULL,NULL,'UNUSED',${TS}"
+            local service="$1" client="$2"
+            echo "'${service}','${client}',1,2,0,1,NULL,NULL,NULL,'UNUSED',NULL,0,${TS},NULL,NULL,'UNUSED',${TS}"
           }
 
           grant_both() {
+            local service="$1" client="$2"
             local row
-            row="$(make_row "$1")"
-            echo "  granting: $1"
+            row="$(make_row "$service" "$client")"
+            echo "  granting $service: $client"
             sqlite3     "$USER_DB" "INSERT OR REPLACE INTO access VALUES(${row});" 2>&1 || echo "    user DB insert failed"
             sudo sqlite3 "$SYS_DB" "INSERT OR REPLACE INTO access VALUES(${row});" 2>&1 || echo "    system DB insert failed"
           }
 
           echo "=== Adding Python ScreenCapture grants ==="
-          grant_both "$PYTHON_BIN"
+          grant_both "kTCCServiceScreenCapture" "$PYTHON_BIN"
           if [ "$PYTHON_REAL" != "$PYTHON_BIN" ]; then
-            grant_both "$PYTHON_REAL"
+            grant_both "kTCCServiceScreenCapture" "$PYTHON_REAL"
           fi
-          grant_both "/usr/sbin/screencapture"
+          grant_both "kTCCServiceScreenCapture" "/usr/sbin/screencapture"
+
+          echo "=== Adding Python Accessibility grants (for AX API) ==="
+          grant_both "kTCCServiceAccessibility" "$PYTHON_BIN"
+          if [ "$PYTHON_REAL" != "$PYTHON_BIN" ]; then
+            grant_both "kTCCServiceAccessibility" "$PYTHON_REAL"
+          fi
 
           echo "=== Flushing tccd ==="
           sudo killall tccd 2>/dev/null || killall tccd 2>/dev/null || true
           sleep 2
 
-          echo "=== Verifying (user DB) ==="
+          echo "=== Verifying ScreenCapture grants (user DB) ==="
           sqlite3 "$USER_DB" \
             "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceScreenCapture' ORDER BY client;"
+          echo "=== Verifying Accessibility grants (user DB) ==="
+          sqlite3 "$USER_DB" \
+            "SELECT client, auth_value, auth_reason FROM access WHERE service='kTCCServiceAccessibility' ORDER BY client;"
 
           # ── Wait for background installs to finish ──
           echo "=== Waiting for brew install ffmpeg ==="
@@ -124,6 +134,12 @@ jobs:
           else
             echo "OK — screenshot looks like a full desktop capture"
           fi
+
+      - name: Set custom desktop wallpaper
+        run: |
+          osascript -e "tell application \"Finder\" to set desktop picture to POSIX file \"$PWD/cua/wallpaper.png\""
+          # Also update dock if needed — tell the System Events to refresh
+          killall Dock 2>/dev/null || true
 
       - name: Run CUA agent
         env:

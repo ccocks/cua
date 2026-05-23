@@ -21,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 
+from ax_tree import get_focused_element, get_ui_tree
 from executor import ActionExecutor
 from nim_client import NIMClient, SYSTEM_PROMPT
 from screen_recorder import ScreenRecorder
@@ -132,7 +133,18 @@ def _run_agent_loop(task: str) -> None:
 
             # ── Call the model ────────────────────────────────────────────────
             if latest_screenshot:
-                messages.append(client.screenshot_observation_message(latest_screenshot))
+                obs = client.screenshot_observation_message(latest_screenshot)
+                # AX hints (supplementary only — screenshot is the source of truth)
+                ax_focused = get_focused_element()
+                ax_tree = get_ui_tree()
+                if ax_focused or ax_tree:
+                    ax_parts = ["AX hints (approximate):"]
+                    if ax_focused:
+                        ax_parts.append(f"focus={json.dumps(ax_focused, ensure_ascii=False)}")
+                    if ax_tree:
+                        ax_parts.append(f"layout:\n{ax_tree}")
+                    obs["content"].append({"type": "text", "text": "\n".join(ax_parts)})
+                messages.append(obs)
                 latest_screenshot = None
 
             messages = client.trim_context(messages)
