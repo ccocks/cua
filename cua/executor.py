@@ -37,7 +37,10 @@ class ActionExecutor:
 
     def click_image(self, image_path: str | Path, button: str = "left", confidence: float = 0.8) -> str:
         img = str(image_path)
-        pos = pyautogui.locateCenterOnScreen(img, confidence=confidence)
+        try:
+            pos = pyautogui.locateCenterOnScreen(img, confidence=confidence)
+        except pyautogui.ImageNotFoundException:
+            pos = None
         if pos is None:
             msg = f"Image not found on screen: {img}"
             log.warning(msg)
