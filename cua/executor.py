@@ -21,8 +21,18 @@ class ActionExecutor:
         log.info("Screen size: %dx%d", self._sw, self._sh)
 
     def _resolve(self, x: float, y: float) -> tuple[int, int]:
-        rx = int(x * self._sw) if 0.0 < x < 1.0 else int(x)
-        ry = int(y * self._sh) if 0.0 < y < 1.0 else int(y)
+        if 0.0 < x <= 1.0:
+            rx = int(x * self._sw)
+        elif 1.0 < x <= 1000.0:
+            rx = int((x / 1000.0) * self._sw)
+        else:
+            rx = int(x)
+        if 0.0 < y <= 1.0:
+            ry = int(y * self._sh)
+        elif 1.0 < y <= 1000.0:
+            ry = int((y / 1000.0) * self._sh)
+        else:
+            ry = int(y)
         rx = max(0, min(rx, self._sw - 1))
         ry = max(0, min(ry, self._sh - 1))
         return rx, ry
